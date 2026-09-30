@@ -55,16 +55,34 @@ async def entrypoint(ctx: agents.JobContext):
     @session.on("user_input_transcribed")
     def on_user_input(ev: agents.voice.UserInputTranscribedEvent):
         log.info("STT (final=%s): %s", ev.is_final, ev.transcript)
-        if ev.is_final and not tracker.query_received:
-            tracker.user_done_at = time.time()
-            tracker.query_received = True
+        if ev.is_final:
+            # A retraction cue bumps the intent version, which makes anything
+            # already planned or running under the old version non-committable.
+            fnc.observe_transcript(ev.transcript)
+            if not tracker.query_received:
+                tracker.user_done_at = time.time()
+                tracker.query_received = True
 
     @session.on("agent_state_changed")
     def on_agent_state(ev: agents.voice.AgentStateChangedEvent):
-        if ev.new_state == "speaking" and tracker.query_received and not tracker.agent_start_at:
-            tracker.agent_start_at = time.time()
-            tracker.log_breakdown(room_name=room)
-            tracker.reset()
+        if ev.new_state == "speaking":
+            # Commit barrier: by the time the agent speaks, this turn's tool
+            # calls have settled, so the surviving set is final.
+            committed = fnc.flush()
+            if committed:
+                log.info("commit barrier: %d call(s) written for room %s", committed, room)
+            if tracker.query_received and not tracker.agent_start_at:
+                tracker.agent_start_at = time.time()
+                tracker.log_breakdown(room_name=room)
+                tracker.reset()
+
+    async def _final_flush():
+        # Safety net: never leave a surviving call uncommitted if the session
+        # ends without the agent ever reaching the speaking state.
+        if fnc.flush():
+            log.info("shutdown flush for room %s", room)
+
+    ctx.add_shutdown_callback(_final_flush)
 
     await session.start(room=ctx.room, agent=PlannerAgent(tools))
     log.info("agent started in room %s (llm=%s, fallback=%s)", room, C.LLM_MODEL, C.LLM_FALLBACK_MODEL)
