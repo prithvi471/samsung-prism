@@ -55,14 +55,23 @@ MOCK_DEFAULTS: dict[str, dict] = {
 }
 
 
+# Generic truthy/falsy words a planner may put in a string-typed value field.
+# Not scenario-specific: any boolean filter can arrive phrased rather than typed
+# ("pets_allowed" -> "allowed" was observed live where ground truth is True).
+_TRUTHY = {"true", "yes", "y", "on", "1", "allowed", "allow", "enabled", "enable",
+           "included", "required"}
+_FALSY = {"false", "no", "n", "off", "0", "disallowed", "disabled", "disable",
+          "excluded", "none"}
+
+
 def _coerce(value):
     """Ground truth carries booleans and numbers; the schema carries strings."""
     if not isinstance(value, str):
         return value
     lowered = value.strip().lower()
-    if lowered in ("true", "yes"):
+    if lowered in _TRUTHY:
         return True
-    if lowered in ("false", "no"):
+    if lowered in _FALSY:
         return False
     try:
         number = float(value)
