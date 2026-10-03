@@ -139,7 +139,12 @@ class Execution:
     t_start: float = 0.0
     t_end: float = 0.0
     result: Any = None
-    state: str = "planned"  # planned running stale cancelled committed
+    # planned = created, not started · running = executing · ran = finished
+    # cleanly, awaiting the commit barrier · stale/cancelled/committed = final.
+    # "ran" must stay distinct from "planned": a revision may drop work that
+    # never started, but it must not pretend completed work never started.
+    state: str = "planned"
+    revised_while_running: bool = False
 
     def as_log_entry(self) -> dict:
         return {
@@ -185,13 +190,20 @@ class RevisionAwareExecutor:
     def revise(self, reason: str = "", text: str = "") -> int:
         """Bump the intent version. Everything planned earlier becomes stale."""
         self._version += 1
-        superseded = [e.execution_id for e in self._pending
-                      if e.intent_version < self._version
-                      and e.state in ("planned", "running")]
+        affected = [e.execution_id for e in self._pending
+                    if e.intent_version < self._version
+                    and e.state in ("planned", "running")]
         self._event("INTENT_REVISED", version=self._version, reason=reason,
-                    text=text, supersedes=superseded)
+                    text=text, affects=affected)
         for e in self._pending:
-            if e.intent_version < self._version and e.state == "planned":
+            if e.intent_version >= self._version:
+                continue
+            if e.state == "running":
+                # It may finish computing. Whether it commits is decided at the
+                # barrier, once we know if anything re-specified its slot.
+                e.revised_while_running = True
+            elif e.state == "planned" and e.kind is ToolKind.STATE_CHANGING:
+                # Never started and it mutates state: drop it outright.
                 e.state = "cancelled"
                 self._event("TASK_CANCELLED", execution_id=e.execution_id,
                             tool=e.tool, reason="intent revised before start")
@@ -279,25 +291,37 @@ class RevisionAwareExecutor:
                 return json.dumps({"status": "cancelled",
                                    "reason": "superseded by a correction"})
         elif not was_stale:
-            rec.state = "planned"  # ran clean; awaiting the commit barrier
+            rec.state = "ran"  # finished cleanly; awaiting the commit barrier
 
         return json.dumps(result)
 
     # ── commit barrier ──────────────────────────────────────────────
     def survivors(self) -> list[Execution]:
-        """Last writer wins per slot, among records still current."""
+        """Last writer wins per slot.
+
+        Staleness is slot-scoped, not turn-scoped. A correction retracts the
+        slot it re-specifies and nothing else: "max price 3000 ... no, 3500"
+        must not discard the pets filter set in the same breath, and two
+        independent autopay changes must both survive. Filtering on
+        `intent_version < current` here did exactly that damage.
+        """
         best: dict[tuple, Execution] = {}
         for rec in self._pending:
             if rec.state in ("cancelled", "stale"):
                 continue
-            if rec.intent_version < self._version:
-                continue
-            if rec.t_start == 0.0:
-                continue  # never actually ran
+            if rec.t_start == 0.0 or rec.t_end == 0.0:
+                continue  # never started, or raised before finishing
             prev = best.get(rec.slot)
             if prev is None or rec.seq > prev.seq:
                 best[rec.slot] = rec
-        return sorted(best.values(), key=lambda r: r.seq)
+        # A call that was still running when the user revised, and whose slot
+        # nothing re-specified afterwards, must not commit: the request it came
+        # from was retracted and never replaced. Version validation is the
+        # safety net; cancellation is only the optimisation. Applied to
+        # read-only calls too, because strict precision penalises any extra
+        # call as hard as a missing one.
+        return sorted((r for r in best.values() if not r.revised_while_running),
+                      key=lambda r: r.seq)
 
     def flush(self) -> list[Execution]:
         """Commit the surviving set, in the order the calls were issued."""

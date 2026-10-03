@@ -112,6 +112,40 @@ class TestSingleCorrection(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([a["filter_name"] for _, a in h.committed],
                          ["pets_allowed", "max_price"])
 
+    async def test_correction_does_not_discard_untouched_slots(self):
+        """Regression: live housing_25 failed because an intent bump invalidated
+        every earlier record, including the pets filter the user never retracted.
+
+        Staleness must be slot-scoped, not turn-scoped.
+        """
+        h = Harness()
+        h.ex.new_intent("set the filters")
+        await h.ex.run("update_search_filter", {"filter_name": "pets_allowed", "value": True})
+        await h.ex.run("update_search_filter", {"filter_name": "max_price", "value": 3000})
+        h.ex.revise(reason="wait, actually change the max price to 3500")
+        await h.ex.run("update_search_filter", {"filter_name": "max_price", "value": 3500})
+        h.ex.flush()
+
+        self.assertEqual(h.committed, [
+            ("update_search_filter", {"filter_name": "pets_allowed", "value": True}),
+            ("update_search_filter", {"filter_name": "max_price", "value": 3500}),
+        ])
+
+    async def test_completed_work_is_not_reported_as_never_started(self):
+        """Regression: `ran` was indistinguishable from `planned`, so revise()
+        cancelled finished executions claiming they never started."""
+        h = Harness()
+        h.ex.new_intent("two autopay changes")
+        await h.ex.run("modify_autopay", {"bill_type": "credit_card", "source_account": "savings"})
+        h.ex.revise(reason="unrelated correction")
+        await h.ex.run("modify_autopay", {"bill_type": "mortgage", "source_account": "checking"})
+        h.ex.flush()
+
+        bogus = [d for n, d in h.events
+                 if n == "TASK_CANCELLED" and "before start" in d.get("reason", "")]
+        self.assertEqual(bogus, [], "completed work was cancelled as 'before start'")
+        self.assertEqual(len(h.committed), 2)
+
     async def test_singleton_tool_supersedes_on_destination_change(self):
         """search_flights to Oslo, corrected to Bergen — one committed call."""
         h = Harness()

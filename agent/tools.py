@@ -17,14 +17,18 @@ log the evaluator reads:
 
 Only calls that survive to the commit barrier are written to the log.
 
-Two deliberate deviations from the reference signatures, neither of which
-changes an argument *name* (which is what the evaluator matches on):
-  * search_apartments' bedrooms/max_price are optional, because some ground
-    truth specifies only the city and required args force the model to invent
-    values the judge then sees as extra;
-  * update_search_filter's value stays typed as str for schema safety, but is
-    coerced to bool/int/float before logging, because ground truth carries
-    true and 3500 rather than "true" and "3500".
+One deliberate deviation from the reference signatures, which does not change
+an argument *name* (what the evaluator matches on): update_search_filter's
+value stays typed as str for schema safety, but is coerced to bool/int/float
+before logging, because ground truth carries true and 3500 rather than "true"
+and "3500".
+
+search_apartments' bedrooms/max_price are REQUIRED and must stay that way.
+Some ground truth specifies only `city`, which tempts you to make them
+optional -- but FDB-v3's own mock signature is
+`search_apartments(city, bedrooms, max_price, **kwargs)` with no defaults, so
+omitting either raises TypeError inside registry.call, the tool returns an
+error, and the planner retries and fails the scenario outright.
 """
 
 import json
@@ -158,7 +162,7 @@ class AssistantFnc:
 
     # ── Housing & Location ─────────────────────────────────────────
     @function_tool(description="Search for available rental apartments.")
-    async def search_apartments(self, context: RunContext, city: str, bedrooms: int = None, max_price: float = None):
+    async def search_apartments(self, context: RunContext, city: str, bedrooms: int, max_price: float):
         """
         Args:
             city: Destination city
