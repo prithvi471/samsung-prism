@@ -159,7 +159,14 @@ class TestSingleCorrection(unittest.IsolatedAsyncioTestCase):
 
 class TestCorrectionDuringExecution(unittest.IsolatedAsyncioTestCase):
     async def test_stale_state_change_finishes_but_never_commits(self):
-        """The invariant: computation may finish, the side effect must not land."""
+        """The invariant: computation may finish, the side effect must not land.
+
+        Stated in the deterministic form. A bare revision with no replacement is
+        NOT evidence that a slot was retracted -- the user may have corrected
+        something else in the same breath -- and withholding on that signal cost
+        recall nondeterministically on live housing_25. What must hold is that
+        once the slot IS re-specified, the in-flight value cannot commit.
+        """
         h = Harness(delay=0.20)
         h.ex.new_intent("set autopay")
 
@@ -170,14 +177,17 @@ class TestCorrectionDuringExecution(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(
             h.ex.run("modify_autopay", {"bill_type": "mortgage", "source_account": "savings"}))
         await asyncio.gather(task, revise_midflight())
+        # The correction names its replacement, as a real correction does.
+        await h.ex.run("modify_autopay", {"bill_type": "mortgage", "source_account": "checking"})
         h.ex.flush()
 
-        # The tool really did run...
-        self.assertEqual(len(h.run_tool.calls), 1)
-        # ...but nothing was committed.
-        self.assertEqual(h.committed, [])
-        stale = [d for n, d in h.events if n == "TASK_STALE"]
-        self.assertTrue(any(d.get("phase") == "after_execution" for d in stale))
+        # Both really executed -- a stale execution is allowed to finish...
+        self.assertEqual(len(h.run_tool.calls), 2)
+        # ...but only the current one committed.
+        self.assertEqual(h.committed, [
+            ("modify_autopay", {"bill_type": "mortgage", "source_account": "checking"}),
+        ])
+        self.assertTrue(any(n == "TASK_STALE" for n, _ in h.events))
 
     async def test_correction_before_start_skips_state_change(self):
         h = Harness()
@@ -200,10 +210,15 @@ class TestCorrectionDuringExecution(unittest.IsolatedAsyncioTestCase):
             h.ex.run("search_apartments",
                      {"city": "Portland", "bedrooms": 1, "max_price": 1800}, version=v),
             revise_midflight())
+        # The correction re-specifies the search, as a real correction does.
+        await h.ex.run("search_apartments",
+                       {"city": "Seattle", "bedrooms": 1, "max_price": 1800})
         h.ex.flush()
 
-        self.assertIn("success", out)          # caller still gets the data
-        self.assertEqual(h.committed, [])      # but it is not scored
+        self.assertIn("success", out)          # caller still gets the stale data
+        self.assertEqual(h.committed, [        # but only the current one is scored
+            ("search_apartments", {"city": "Seattle", "bedrooms": 1, "max_price": 1800}),
+        ])
 
 
 class TestDuplicates(unittest.IsolatedAsyncioTestCase):

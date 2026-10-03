@@ -280,17 +280,15 @@ class RevisionAwareExecutor:
             fut.set_result(result)
         self._results[key] = result
 
-        # Re-validate AFTER execution — the window the point-sample check missed.
+        # The intent may have been revised while this was running. That alone
+        # does NOT make the result stale: only a later call on the same slot
+        # does, and that is decided at the commit barrier. Deciding it here made
+        # commits depend on a race between execution and the revision event —
+        # two live runs of housing_25 committed different sets on identical
+        # audio, because "pets allowed" happened to still be running once.
         if rec.intent_version < self._version:
-            rec.state = "stale"
-            if not was_stale:
-                self._event("TASK_STALE", execution_id=rec.execution_id, tool=tool,
-                            planned_at=rec.intent_version, current=self._version,
-                            phase="after_execution")
-            if rec.kind is ToolKind.STATE_CHANGING:
-                return json.dumps({"status": "cancelled",
-                                   "reason": "superseded by a correction"})
-        elif not was_stale:
+            rec.revised_while_running = True
+        if not was_stale:
             rec.state = "ran"  # finished cleanly; awaiting the commit barrier
 
         return json.dumps(result)
@@ -314,14 +312,12 @@ class RevisionAwareExecutor:
             prev = best.get(rec.slot)
             if prev is None or rec.seq > prev.seq:
                 best[rec.slot] = rec
-        # A call that was still running when the user revised, and whose slot
-        # nothing re-specified afterwards, must not commit: the request it came
-        # from was retracted and never replaced. Version validation is the
-        # safety net; cancellation is only the optimisation. Applied to
-        # read-only calls too, because strict precision penalises any extra
-        # call as hard as a missing one.
-        return sorted((r for r in best.values() if not r.revised_while_running),
-                      key=lambda r: r.seq)
+        # Deliberately NOT filtered on revised_while_running. A revision with
+        # no replacement call for a slot is no evidence that that slot was
+        # retracted — the user may simply have corrected something else in the
+        # same breath. Withholding on that signal cost recall nondeterministically
+        # (see the note in run()). The flag is kept for the audit trail only.
+        return sorted(best.values(), key=lambda r: r.seq)
 
     def flush(self) -> list[Execution]:
         """Commit the surviving set, in the order the calls were issued."""

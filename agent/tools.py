@@ -17,18 +17,22 @@ log the evaluator reads:
 
 Only calls that survive to the commit barrier are written to the log.
 
-One deliberate deviation from the reference signatures, which does not change
-an argument *name* (what the evaluator matches on): update_search_filter's
-value stays typed as str for schema safety, but is coerced to bool/int/float
-before logging, because ground truth carries true and 3500 rather than "true"
-and "3500".
+Two deliberate deviations from the reference signatures, neither of which
+changes an argument *name* (what the evaluator matches on):
 
-search_apartments' bedrooms/max_price are REQUIRED and must stay that way.
-Some ground truth specifies only `city`, which tempts you to make them
-optional -- but FDB-v3's own mock signature is
-`search_apartments(city, bedrooms, max_price, **kwargs)` with no defaults, so
-omitting either raises TypeError inside registry.call, the tool returns an
-error, and the planner retries and fails the scenario outright.
+  * update_search_filter's value stays typed as str for schema safety, but is
+    coerced to bool/int/float before logging, because ground truth carries
+    true and 3500 rather than "true" and "3500".
+
+  * search_apartments' bedrooms/max_price are optional, because ground truth
+    sometimes specifies only `city` and the planner will not call a tool whose
+    required argument it has no value for -- it narrates the search instead,
+    costing the call entirely. But FDB-v3's mock is
+    `search_apartments(city, bedrooms, max_price, **kwargs)` with no defaults,
+    so omitting one raises TypeError inside registry.call. MOCK_DEFAULTS below
+    fills those at the call boundary only: the mock gets what it needs to run,
+    while the telemetry log -- the thing actually scored -- records exactly the
+    arguments the planner supplied. Both failure modes were observed live.
 """
 
 import json
@@ -42,6 +46,13 @@ from agent.revision import Execution, RevisionAwareExecutor
 
 log = logging.getLogger("tools")
 function_tool = llm.function_tool
+
+
+# Arguments FDB-v3's mocks require positionally but that the planner may
+# legitimately omit. Applied only when invoking the mock; never logged.
+MOCK_DEFAULTS: dict[str, dict] = {
+    "search_apartments": {"bedrooms": 1, "max_price": 1_000_000.0},
+}
 
 
 def _coerce(value):
@@ -66,11 +77,20 @@ class AssistantFnc:
         self.tracker = tracker
         self.registry = registry
         self.executor = RevisionAwareExecutor(
-            run_tool=registry.call,
+            run_tool=self._call_mock,
             commit=self._commit,
             events=self._on_event,
         )
         self.executor.new_intent("session start")
+
+    def _call_mock(self, name: str, **kwargs):
+        """Invoke the FDB-v3 mock, filling only what its signature demands.
+
+        The defaults never reach the telemetry log, so the scored arguments stay
+        exactly what the planner said.
+        """
+        merged = {**MOCK_DEFAULTS.get(name, {}), **kwargs}
+        return self.registry.call(name, **merged)
 
     # ── commit barrier plumbing ───────────────────────────────────
     def _commit(self, rec: Execution) -> None:
@@ -162,7 +182,7 @@ class AssistantFnc:
 
     # ── Housing & Location ─────────────────────────────────────────
     @function_tool(description="Search for available rental apartments.")
-    async def search_apartments(self, context: RunContext, city: str, bedrooms: int, max_price: float):
+    async def search_apartments(self, context: RunContext, city: str, bedrooms: int = None, max_price: float = None):
         """
         Args:
             city: Destination city
