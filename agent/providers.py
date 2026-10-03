@@ -5,6 +5,14 @@ import logging
 from livekit.agents import llm
 from livekit.plugins import openai, silero
 
+# Imported for its side effect: the package calls Plugin.register_plugin(), which
+# is what makes "python -m agent.main download-files" fetch the turn detector's
+# model files. Without this the plugin is only imported lazily inside
+# build_turn_detector(), so the download step silently skips it and the job
+# crashes at session start with: Could not find file "languages.json".
+# The model classes themselves stay lazily imported in build_turn_detector().
+from livekit.plugins import turn_detector  # noqa: F401
+
 from agent import config as C
 
 log = logging.getLogger("providers")

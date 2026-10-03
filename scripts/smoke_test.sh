@@ -18,6 +18,10 @@ cp .env "$V3/.env.local"
 set -a; source .env; set +a
 export FDB_V3_DIR="$V3"
 
+# VAD + turn-detector weights. Cheap when already cached; without it the job
+# crashes at session start on a missing "languages.json".
+python -m agent.main download-files
+
 if ! curl -sf http://127.0.0.1:8880/v1/models >/dev/null; then
   python -m agent.kokoro_server > /tmp/smoke_kokoro.log 2>&1 &
   KOKORO_PID=$!
