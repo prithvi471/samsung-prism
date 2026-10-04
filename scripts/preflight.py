@@ -22,6 +22,7 @@ TEST_TOOL = {
 }
 
 failures = []
+warnings = []
 
 
 def check(name, fn):
@@ -33,6 +34,16 @@ def check(name, fn):
         failures.append(name)
 
 
+def warn(name, fn):
+    """Non-fatal check: the agent runs without it, but the benchmark score is
+    degraded. Reported loudly so it cannot pass unnoticed."""
+    try:
+        print(f"  OK   {name}: {fn()}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  WARN {name}: {e}")
+        warnings.append(name)
+
+
 def need_env():
     missing = [k for k, v in {
         "LIVEKIT_URL": C.env("LIVEKIT_URL"), "LIVEKIT_API_KEY": C.env("LIVEKIT_API_KEY"),
@@ -41,9 +52,24 @@ def need_env():
     }.items() if not v]
     if missing:
         raise RuntimeError("missing " + ", ".join(missing))
-    if not C.env("OPENAI_API_KEY"):
-        return "agent keys set (WARNING: no OPENAI_API_KEY, so --use-llm judge falls back to exact match)"
     return "all set"
+
+
+def judge_reachable():
+    """Actually call gpt-4o. Presence of OPENAI_API_KEY proves nothing: an
+    invalid or unfunded key still lets --use-llm run, because the evaluators
+    swallow the exception and silently fall back to exact string matching.
+    A whole 100-scenario benchmark was scored that way before this check
+    existed -- argument accuracy and response accuracy were meaningless, and
+    the report looked normal."""
+    if not C.env("OPENAI_API_KEY"):
+        raise RuntimeError("no OPENAI_API_KEY; --use-llm will fall back to exact match")
+    client = OpenAI(api_key=C.env("OPENAI_API_KEY"), timeout=30)
+    r = client.chat.completions.create(
+        model="gpt-4o", temperature=0, max_tokens=5,
+        messages=[{"role": "user", "content": "reply with the single word: ready"}],
+    )
+    return f"gpt-4o responded {r.choices[0].message.content.strip()!r}"
 
 
 def tool_call(model, base_url, api_key):
@@ -85,6 +111,15 @@ if C.LLM_FALLBACK_MODEL:
     check(f"fallback {C.LLM_FALLBACK_MODEL}", tool_call(C.LLM_FALLBACK_MODEL, C.LLM_FALLBACK_BASE_URL, C.LLM_FALLBACK_API_KEY))
 check(f"stt {C.STT_BASE_URL}", stt_models)
 check(f"tts {C.TTS_BASE_URL}", tts_speech)
+warn("judge gpt-4o", judge_reachable)
+
+if warnings:
+    print(
+        f"\nWARNING: {', '.join(warnings)} unavailable. The agent will run, but the\n"
+        "FDB-v3 evaluators silently fall back to EXACT STRING MATCHING, which scores\n"
+        "correct answers wrong (e.g. date '2026-07-15' vs 'July 15'). Benchmark\n"
+        "argument accuracy and response accuracy would NOT be meaningful."
+    )
 
 if failures:
     print(f"\nPreflight FAILED: {', '.join(failures)}. Fix .env / services before running the benchmark.")
