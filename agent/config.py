@@ -35,10 +35,30 @@ STT_MODEL = env("STT_MODEL", "whisper-large-v3-turbo")
 # ── Planner LLM (primary + fallback, both OpenAI-compatible) ─────
 LLM_BASE_URL = env("LLM_BASE_URL", "https://ollama.com/v1")
 LLM_API_KEY = env("LLM_API_KEY", env("OLLAMA_API_KEY"))
+# Planner A/B, 27 recordings / 21 scored scenarios, exact-match, only
+# LLM_MODEL varying. Candidate gemma4:31b was REJECTED and gpt-oss:120b kept.
+#
+#   strict pass      5/21 both         -- no gain on the headline metric
+#   tool-selection   14/21 -> 17/21    -- gemma4 better
+#   missing tools    7 -> 3            -- gemma4 better
+#   wrong arguments  9 -> 12           -- gemma4 worse (same scenarios, later layer)
+#   latency          equivalent, gemma4's max tighter (8.8s vs 14.3s)
+#   housing_25       1/3 -> 0/3        -- gemma4 DETERMINISTICALLY worse
+#
+# gemma4:31b emitted tools in all four traced gpt-oss decline cases, but it
+# refuses housing_25 identically every run: "How many bedrooms are you looking
+# for in San Francisco?" -- declining over `bedrooms`, the very argument
+# MOCK_DEFAULTS makes optional. housing_25 is the flagship self-correction
+# scenario, so a deterministic regression there outweighed an aggregate
+# tool-selection gain that did not move strict pass.
+#
+# Neither model passes housing_25 reliably (1/3 at best), so this is a known
+# weak spot of the planner layer, not of the revision executor -- every tool
+# the planner emitted was committed, with zero stale/cancelled/duplicate.
 LLM_MODEL = env("LLM_MODEL", "gpt-oss:120b")
 LLM_FALLBACK_BASE_URL = env("LLM_FALLBACK_BASE_URL", LLM_BASE_URL)
 LLM_FALLBACK_API_KEY = env("LLM_FALLBACK_API_KEY", LLM_API_KEY)
-LLM_FALLBACK_MODEL = env("LLM_FALLBACK_MODEL", "gemma4:31b")  # verify exact tag on Ollama Cloud
+LLM_FALLBACK_MODEL = env("LLM_FALLBACK_MODEL", "gemma4:31b")
 LLM_REASONING_EFFORT = env("LLM_REASONING_EFFORT", "low")
 LLM_TEMPERATURE = float(env("LLM_TEMPERATURE", "0"))
 LLM_TIMEOUT_S = float(env("LLM_TIMEOUT_S", "15"))
