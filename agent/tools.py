@@ -37,6 +37,7 @@ changes an argument *name* (what the evaluator matches on):
 
 import json
 import logging
+import re
 
 from livekit.agents import RunContext, llm
 
@@ -53,6 +54,27 @@ function_tool = llm.function_tool
 MOCK_DEFAULTS: dict[str, dict] = {
     "search_apartments": {"bedrooms": 1, "max_price": 1_000_000.0},
 }
+
+# Argument names whose values are machine identifiers rather than prose. When a
+# speaker spells one out character by character ("P as in Papa, O, nine, nine,
+# nine") the STT renders separators that are artifacts of dictation, not part of
+# the identifier: "P-O-9-9-9" where the value is PO999. Keyed on argument NAME
+# only -- the same basis as revision.py's slot keys -- so no tool, scenario or
+# expected value is referenced. Free-text fields are deliberately excluded:
+# passenger_name "Riley Kim" must keep its space.
+ID_ARGS = frozenset({"order_id", "doc_number", "product_id", "flight_id"})
+
+
+def _normalize_identifier(value):
+    """Strip dictation separators from an identifier-shaped value."""
+    if not isinstance(value, str):
+        return value
+    stripped = re.sub(r"[\s\-._]", "", value)
+    # Only collapse if what remains is a single alphanumeric token. A value that
+    # was really prose keeps its separators.
+    if stripped and re.fullmatch(r"[A-Za-z0-9]+", stripped):
+        return stripped.upper()
+    return value
 
 
 # Generic truthy/falsy words a planner may put in a string-typed value field.
@@ -121,6 +143,9 @@ class AssistantFnc:
         self.executor.observe_transcript(text)
 
     async def _run(self, context: RunContext, name: str, args: dict) -> str:
+        # One central place, so every tool gets it and no tool method repeats it.
+        args = {k: (_normalize_identifier(v) if k in ID_ARGS else v)
+                for k, v in args.items()}
         first = self.tracker.tool_start_at == 0
         out = await self.executor.run(
             name, args,
