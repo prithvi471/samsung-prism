@@ -157,17 +157,80 @@ For a fast subset during development: `bash scripts/smoke_test.sh`.
 
 ## 7. Results
 
-**Not yet measured.** The benchmark has not been run on this branch. Running it
-requires four API keys, a LiveKit Cloud project, an Ubuntu host with CUDA for
-the NeMo ASR the harness uses, and the ~100-sample audio set — none of which
-were available on the machine this branch was written on.
+All 100 scenarios, run on the configuration in §3. Artifacts in
+`eval/results/final-20261004-205743/`.
 
-The innovation is verified by unit tests and the extension demo, not by a
-benchmark delta. **No claim is made here about F1, argument accuracy, pass rate
-or latency, and no baseline-versus-innovation comparison has been performed.**
-The honest next step is to run `scripts/run_fdb_v3.sh` twice — once with
-`REVISION_AWARE=0` semantics (i.e. commit-on-execute) and once as shipped — and
-fill this section from `eval/results/`.
+> **Scoring caveat, read first.** These are **exact-match** scores. FDB-v3's
+> canonical metric uses gpt-4o as an LLM judge for argument and response
+> accuracy; no funded OpenAI key was available, and the evaluators silently fall
+> back to exact string comparison when the judge is unreachable. Exact matching
+> marks semantically correct answers wrong — `date "2026-07-15"` vs `"July 15"`,
+> `order_id "P-O-9-9-9"` vs `"PO999"`. **Strict pass rate and argument accuracy
+> below are therefore a lower bound, not the FDB-v3 score.** On an earlier run
+> the same results scored 0.52 exact-match and 0.65 under an LLM judge.
+> Tool-selection accuracy, turn-take and latency need no judge and are exact.
+
+| Metric | Value | Judge needed? |
+|---|---|---|
+| **Tool-selection accuracy (F1)** | **0.934** (0.915 incl. 2 silent samples) | no — exact |
+| Turn-take success | 0.98 (98/100) | no — exact |
+| First-response latency | 6.49 s ± 3.56 (min 1.60, median 5.84, max 29.28; N=93) | no — exact |
+| Tool-call latency | 2.00 s ± 5.72 (median 2.80; N=90) | no — exact |
+| Interruption rate | 5.1% | no — exact |
+| Strict pass rate | 0.53 (53/100) | **lower bound** |
+| Argument accuracy | 0.639 (0.627 all) | **lower bound** |
+| Response accuracy | not measured | judge unavailable |
+
+Failure mix: 17 wrong-tool, 30 wrong-argument.
+
+### Where the revision engine shows up
+
+| Cut | Pass rate |
+|---|---|
+| **`state_rollback_test` scenarios (21)** | **0.706** |
+| all other scenarios (79) | 0.494 |
+| SELF_CORRECTION | 0.706 |
+| FALSE_START | 0.667 |
+| HESITATION | 0.500 |
+| FILLER | 0.448 |
+| PAUSE | 0.389 |
+
+The 21 self-correction scenarios — the ones the revision-aware executor exists
+for — pass **21.2 points above** everything else, and that margin widened from
++15.3 on the first baseline as the fixes below landed. Our weakest features are
+PAUSE and FILLER, which are turn-detection behaviour, not interruption handling.
+
+### By difficulty and chain length
+
+| | pass rate |
+|---|---|
+| easy / medium / hard | 0.583 / 0.618 / 0.367 |
+| 1 / 2 / 3+ expected calls | 0.621 / 0.389 / 0.312 |
+| ecommerce / finance / housing / travel | 0.759 / 0.880 / 0.308 / 0.050 |
+
+`travel_identity` at 0.05 is dominated by the exact-match handicap: that domain
+is built from spoken dates and spelled-out document numbers, which are
+semantically right and textually different. Under an LLM judge the same domain
+scored 0.50.
+
+### Movement across the session
+
+| | first baseline | final | Δ |
+|---|---|---|---|
+| tool-selection accuracy | 0.912 | **0.934** | +2.2 pts |
+| argument accuracy | 0.594 | **0.639** | +4.5 pts |
+| strict pass (exact-match) | 0.52 | **0.53** | +1 |
+| rollback vs non-rollback gap | +15.3 | **+21.2** | +5.9 |
+
+### What is still unmeasured
+
+- **Canonical FDB-v3 score.** Needs a funded `OPENAI_API_KEY`. Re-scoring needs
+  no re-inference — the 100 result files are on disk, so it is ~10 minutes of
+  evaluator time.
+- **Response accuracy.** Same reason.
+- **The planner fallback path.** `gemma4:31b` is verified tool-capable by
+  preflight but only activates on primary failure; it never fired during the
+  final run.
 
 ## 8. Repo layout
 
