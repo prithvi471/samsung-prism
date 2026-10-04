@@ -49,6 +49,7 @@ async def entrypoint(ctx: agents.JobContext):
         turn_detection=providers.build_turn_detector(),
         min_endpointing_delay=C.MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=C.MAX_ENDPOINTING_DELAY,
+        max_tool_steps=C.MAX_TOOL_STEPS,
         allow_interruptions=True,
     )
 

@@ -50,6 +50,14 @@ TTS_MODEL = env("TTS_MODEL", "kokoro")
 TTS_VOICE = env("TTS_VOICE", "af_heart")
 
 # ── Turn taking ───────────────────────────────────────────────────
+# LiveKit caps consecutive tool-calling LLM turns at 3 by default. A 3-step
+# dependency chain (search -> commute -> filter) needs one step per dependent
+# call plus a final step to speak, which sits exactly on that limit; the worker
+# log shows "maximum number of function calls steps reached" firing 12 times
+# across 4 rooms in the 100-scenario run, and housing_24 lost calculate_commute
+# to it. Raised, and kept env-swappable so the change is reversible.
+MAX_TOOL_STEPS = int(env("MAX_TOOL_STEPS", "8"))
+
 TURN_DETECTOR = env("TURN_DETECTOR", "english")  # english | multilingual | none
 MIN_ENDPOINTING_DELAY = float(env("MIN_ENDPOINTING_DELAY", "0.5"))
 MAX_ENDPOINTING_DELAY = float(env("MAX_ENDPOINTING_DELAY", "3.0"))
