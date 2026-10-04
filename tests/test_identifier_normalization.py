@@ -67,3 +67,45 @@ class TestIdentifierNormalization(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@unittest.skipUnless(HAVE_TOOLS, "agent.tools requires livekit")
+class TestDashboardSinkCannotBreakATurn(unittest.TestCase):
+    """Regression: the sink's first parameter was named `kind`, which collided
+    with the executor's own `kind` payload field. The resulting TypeError was
+    raised at argument-binding time, propagated out of the event callback and
+    through the executor, and failed every tool call -- 22 TASK_STARTED, nothing
+    committed, the agent never spoke.
+    """
+
+    def test_payload_kind_does_not_collide(self):
+        import json
+        import tempfile
+        import os
+        from agent import dashboard_events as de
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ev.jsonl")
+            old = de.PATH
+            de.PATH = path
+            try:
+                # Exactly the shape TASK_STARTED emits.
+                de.emit("TASK_STARTED", room="r1", tool="search_flights",
+                        kind="read_only", execution_id="abc")
+                rec = json.loads(open(path).read().strip())
+            finally:
+                de.PATH = old
+
+        self.assertEqual(rec["kind"], "TASK_STARTED")   # event name wins
+        self.assertEqual(rec["tool_kind"], "read_only")  # payload preserved
+        self.assertEqual(rec["tool"], "search_flights")
+
+    def test_sink_is_inert_without_the_env_var(self):
+        from agent import dashboard_events as de
+        old = de.PATH
+        de.PATH = ""
+        try:
+            de.emit("TASK_STARTED", kind="read_only")  # must not raise
+            self.assertFalse(de.enabled())
+        finally:
+            de.PATH = old

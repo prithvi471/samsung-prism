@@ -144,7 +144,12 @@ class AssistantFnc:
         log.info("%s %s", name, json.dumps(data, default=str))
         # Same events, same moment, to the dashboard sink. Not a second source
         # of truth -- the identical dict the executor just emitted.
-        dashboard_events.emit(name, room=self.room_name, **data)
+        # Guarded: a TypeError raised here once propagated through the executor
+        # and failed every tool call. Observability must never break a turn.
+        try:
+            dashboard_events.emit(name, room=self.room_name, **data)
+        except Exception:  # noqa: BLE001
+            log.warning("dashboard sink failed for %s", name, exc_info=True)
 
     def flush(self) -> int:
         """Commit the surviving set. Called when the agent starts speaking and
