@@ -31,7 +31,6 @@ class TestIdentifierNormalization(unittest.TestCase):
             ("V-4-4", "V44"),
             ("E77-2211", "E772211"),
             ("P 5 2", "P52"),
-            ("123abc", "123ABC"),
         ]:
             self.assertEqual(_normalize_identifier(raw), want, raw)
 
@@ -41,9 +40,13 @@ class TestIdentifierNormalization(unittest.TestCase):
 
     def test_prose_keeps_its_separators(self):
         """A value that is really prose must survive untouched -- stripping
-        would corrupt it."""
-        for v in ["out for delivery", "my office building", "5th Street west"]:
-            self.assertEqual(_normalize_identifier(v), v)
+        would corrupt it. 'out for delivery' collapsing to 'OUTFORDELIVERY'
+        is the bug this test caught in the first implementation.
+        """
+        for v in ["out for delivery", "my office building", "5th Street west",
+                  "the grocery store", "coffee shop on 5th", "Riley Kim",
+                  "Apartment APT1, Dallas", "123abc"]:
+            self.assertEqual(_normalize_identifier(v), v, v)
 
     def test_non_strings_pass_through(self):
         for v in [None, 3500, True, 12.5]:
