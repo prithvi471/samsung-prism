@@ -68,19 +68,19 @@ ID_ARGS = frozenset({"order_id", "doc_number", "product_id", "flight_id"})
 def _normalize_identifier(value):
     """Strip dictation separators from an identifier-shaped value.
 
-    Shape test, not a word list. A spelled-out identifier contains a digit and
-    no real words -- its letters arrive one at a time ("P-O-9-9-9", "B.O.B.
-    1-2"). Prose fails one of those: "out for delivery" has no digit, "5th
-    Street west" has a multi-letter word. Checking only that the *stripped*
-    result was alphanumeric was not enough: "out for delivery" collapses to
-    "OUTFORDELIVERY", which a test caught.
+    Shape test, not a word list: a spelled-out identifier has no real words in
+    it, because its letters arrive one at a time ("P-O-9-9-9", "B.O.B. 1-2",
+    "D-E-L-I-V"). Every prose value carries at least one word of three or more
+    letters -- "out for delivery", "5th Street west", "my office building" --
+    so that single check separates them.
+
+    Checking only that the *stripped* result was alphanumeric was not enough:
+    "out for delivery" collapsed to "OUTFORDELIVERY", which a test caught.
     """
     if not isinstance(value, str):
         return value
-    if not re.search(r"\d", value):
-        return value                       # no digit -> prose, e.g. "my office"
     if re.search(r"[A-Za-z]{3,}", value):
-        return value                       # a real word -> "5th Street west"
+        return value                       # a real word -> prose, leave alone
     stripped = re.sub(r"[\s\-._]", "", value)
     if stripped and re.fullmatch(r"[A-Za-z0-9]+", stripped) and len(stripped) <= 20:
         return stripped.upper()

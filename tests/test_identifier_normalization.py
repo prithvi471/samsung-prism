@@ -31,6 +31,8 @@ class TestIdentifierNormalization(unittest.TestCase):
             ("V-4-4", "V44"),
             ("E77-2211", "E772211"),
             ("P 5 2", "P52"),
+            ("D-E-L-I-V", "DELIV"),   # letters-only spelled id
+            ("A-1", "A1"),
         ]:
             self.assertEqual(_normalize_identifier(raw), want, raw)
 
