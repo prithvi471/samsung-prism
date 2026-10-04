@@ -41,6 +41,7 @@ import re
 
 from livekit.agents import RunContext, llm
 
+from agent import dashboard_events
 from agent.config import TOOL_LOG_PATH
 from agent.latency import LatencyTracker
 from agent.revision import Execution, RevisionAwareExecutor
@@ -141,6 +142,9 @@ class AssistantFnc:
 
     def _on_event(self, name: str, data: dict) -> None:
         log.info("%s %s", name, json.dumps(data, default=str))
+        # Same events, same moment, to the dashboard sink. Not a second source
+        # of truth -- the identical dict the executor just emitted.
+        dashboard_events.emit(name, room=self.room_name, **data)
 
     def flush(self) -> int:
         """Commit the surviving set. Called when the agent starts speaking and

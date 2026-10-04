@@ -13,6 +13,7 @@ from livekit import agents
 from livekit.agents import Agent, AgentServer, AgentSession, llm
 
 from agent import config as C
+from agent import dashboard_events
 from agent import providers
 from agent.latency import LatencyTracker, heartbeat
 from agent.prompts import PLANNER_INSTRUCTIONS
@@ -56,6 +57,8 @@ async def entrypoint(ctx: agents.JobContext):
     @session.on("user_input_transcribed")
     def on_user_input(ev: agents.voice.UserInputTranscribedEvent):
         log.info("STT (final=%s): %s", ev.is_final, ev.transcript)
+        dashboard_events.emit("STT", room=room, final=bool(ev.is_final),
+                              text=ev.transcript)
         if ev.is_final:
             # A retraction cue bumps the intent version, which makes anything
             # already planned or running under the old version non-committable.
@@ -72,10 +75,26 @@ async def entrypoint(ctx: agents.JobContext):
             committed = fnc.flush()
             if committed:
                 log.info("commit barrier: %d call(s) written for room %s", committed, room)
+                dashboard_events.emit("COMMIT_BARRIER", room=room, calls=committed)
             if tracker.query_received and not tracker.agent_start_at:
                 tracker.agent_start_at = time.time()
+                dashboard_events.emit("LATENCY", room=room,
+                                      first_response_s=round(
+                                          tracker.agent_start_at - tracker.user_done_at, 3))
                 tracker.log_breakdown(room_name=room)
                 tracker.reset()
+        dashboard_events.emit("AGENT_STATE", room=room, state=str(ev.new_state))
+
+    @session.on("conversation_item_added")
+    def on_item(ev):
+        # The agent's own words, straight from the session -- requirement for a
+        # live agent-response panel that is not reconstructed from audio.
+        try:
+            item = ev.item
+            dashboard_events.emit("SPEECH", room=room, role=str(item.role),
+                                  text=item.text_content or "")
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _final_flush():
         # Safety net: never leave a surviving call uncommitted if the session

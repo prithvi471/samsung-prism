@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interruptible Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.5.7/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --line:#262b36; --txt:#e6e9ef; --dim:#8b93a7;
+    --accent:#4c8dff; --ok:#39b87a; --stale:#e0a030; --bad:#e05a5a; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+  .cfg{font:11px/1.4 var(--mono);color:var(--dim)}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+  button.sec{background:#2b3140}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  #dot{width:9px;height:9px;border-radius:50%;background:#555;display:inline-block;margin-right:6px}
+  #dot.live{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  main{display:grid;grid-template-columns:1fr 1fr 420px;gap:14px;padding:14px 20px;align-items:start}
+  @media(max-width:1100px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px;min-width:0}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--dim);margin:0 0 9px}
+  .big{font:600 20px/1.3 var(--mono)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font:12px/1.6 var(--mono)}
+  .kv span:nth-child(odd){color:var(--dim)}
+  .bubble{background:#1d2129;border-left:3px solid var(--accent);border-radius:0 6px 6px 0;padding:8px 10px;margin:6px 0;font-size:13px;white-space:pre-wrap;word-break:break-word}
+  .bubble.agent{border-left-color:var(--ok)}
+  #stream{height:430px;overflow-y:auto;font:11.5px/1.6 var(--mono)}
+  .ev{padding:3px 0;border-bottom:1px solid #1e222b;word-break:break-all}
+  .ev b{display:inline-block;min-width:168px}
+  .INTENT_CREATED b,.STREAM_OPEN b{color:var(--accent)}
+  .INTENT_REVISED b{color:var(--stale)}
+  .TASK_STARTED b{color:#9fb4d8}
+  .TASK_STALE b,.TASK_CANCELLED b{color:var(--stale)}
+  .TASK_COMMITTED b,.COMMIT_BARRIER b{color:var(--ok)}
+  .DUPLICATE_SUPPRESSED b{color:#b58ad8}
+  .t{color:#5d6679}
+  pre{white-space:pre-wrap;font:11.5px/1.5 var(--mono);background:#12151b;border:1px solid var(--line);border-radius:6px;padding:10px;max-height:320px;overflow:auto}
+  .pill{display:inline-block;padding:2px 8px;border-radius:99px;font:11px var(--mono);background:#2b3140;color:var(--dim)}
+  .pill.ok{background:rgba(57,184,122,.16);color:var(--ok)}
+  .pill.bad{background:rgba(224,90,90,.16);color:var(--bad)}
+  .note{color:var(--dim);font-size:11.5px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Interruptible Real-Time Agent</h1>
+  <span><span id="dot"></span><span id="status" class="cfg">idle</span></span>
+  <button id="start">Start voice</button>
+  <button id="stop" class="sec" disabled>Stop</button>
+  <button id="navbtn" class="sec">Run in-car extension</button>
+  <span id="cfg" class="cfg"></span>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Live user transcript</h2>
+      <div id="utter"><span class="cfg">waiting for speech…</span></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Agent response</h2>
+      <div id="agent"><span class="cfg">—</span></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>In-car navigation extension</h2>
+      <div id="navres"><span class="cfg">press “Run in-car extension”</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>Current intent</h2>
+      <div class="big"><span id="iver">v–</span> <span id="istate" class="pill">no intent</span></div>
+      <div class="note" id="itext">—</div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Current tool · arguments · execution status</h2>
+      <div class="kv">
+        <span>tool</span><span id="tname">—</span>
+        <span>arguments</span><span id="targs">—</span>
+        <span>status</span><span id="tstat">—</span>
+        <span>exec id</span><span id="tid">—</span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Counters</h2>
+      <div class="kv">
+        <span>started</span><span id="cs">0</span>
+        <span>committed</span><span id="cc">0</span>
+        <span>stale / cancelled</span><span id="cst">0</span>
+        <span>duplicates suppressed</span><span id="cd">0</span>
+        <span>revisions</span><span id="cr">0</span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Latency</h2>
+      <div class="kv">
+        <span>first response</span><span id="lat">—</span>
+        <span>last tool exec</span><span id="texec">—</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>Live event stream <span class="cfg">— from the executor, unedited</span></h2>
+      <div id="stream"></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Committed set</h2>
+      <div id="committed"><span class="cfg">nothing committed yet</span></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let c = {s:0, c:0, st:0, d:0, r:0};
+
+fetch('/config').then(r=>r.json()).then(k=>{
+  $('cfg').textContent = `planner ${k.planner} · fallback ${k.fallback} · stt ${k.stt} · tts ${k.tts} · steps ${k.max_tool_steps} · endpointing ${k.endpointing}`;
+});
+
+function row(e){
+  const d = new Date((e.t||Date.now()/1000)*1000).toLocaleTimeString();
+  const kind = e.kind || '?';
+  const rest = {...e}; delete rest.kind; delete rest.t; delete rest.room;
+  const div = document.createElement('div');
+  div.className = 'ev ' + kind;
+  div.innerHTML = `<span class="t">${d}</span> <b>${kind}</b> ${escapeHtml(JSON.stringify(rest))}`;
+  const s = $('stream'); s.appendChild(div); s.scrollTop = s.scrollHeight;
+  while (s.childElementCount > 400) s.removeChild(s.firstChild);
+}
+function escapeHtml(x){return (x||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
+function bubble(where, text, cls){
+  const b=document.createElement('div'); b.className='bubble '+(cls||''); b.textContent=text;
+  const host=$(where); if(host.querySelector('.cfg')) host.innerHTML='';
+  host.appendChild(b); host.scrollTop=host.scrollHeight;
+}
+
+// ---- real executor events over SSE -----------------------------------------
+const es = new EventSource('/events');
+es.onmessage = m => {
+  let e; try { e = JSON.parse(m.data); } catch { return; }
+  row(e);
+  switch(e.kind){
+    case 'STT':
+      if (e.final) bubble('utter', e.text || '');
+      break;
+    case 'SPEECH':
+      if ((e.role||'').includes('assistant') && (e.text||'').trim()) bubble('agent', e.text, 'agent');
+      break;
+    case 'INTENT_CREATED':
+      $('iver').textContent = 'v'+e.version;
+      $('istate').textContent = 'created'; $('istate').className='pill ok';
+      if (e.text) $('itext').textContent = e.text;
+      break;
+    case 'INTENT_REVISED':
+      c.r++; $('cr').textContent=c.r;
+      $('iver').textContent = 'v'+e.version;
+      $('istate').textContent = 'REVISED'; $('istate').className='pill bad';
+      if (e.text) $('itext').textContent = e.text;
+      break;
+    case 'TASK_STARTED':
+      c.s++; $('cs').textContent=c.s;
+      $('tname').textContent = e.tool || '—';
+      $('targs').textContent = JSON.stringify(e.args||{});
+      $('tstat').textContent = 'running (' + (e.kind_ || e.kind2 || 'exec') + ')';
+      $('tstat').textContent = 'running';
+      $('tid').textContent = e.execution_id || '—';
+      break;
+    case 'TASK_STALE':
+      c.st++; $('cst').textContent=c.st;
+      $('tstat').textContent = 'STALE — refused at commit' + (e.phase? ' ('+e.phase+')':'');
+      break;
+    case 'TASK_CANCELLED':
+      c.st++; $('cst').textContent=c.st;
+      $('tstat').textContent = 'cancelled';
+      break;
+    case 'TASK_COMMITTED': {
+      c.c++; $('cc').textContent=c.c;
+      $('tstat').textContent = 'COMMITTED';
+      const host=$('committed'); if(host.querySelector('.cfg')) host.innerHTML='';
+      const d=document.createElement('div'); d.className='bubble agent';
+      d.textContent = `${e.tool} ${JSON.stringify(e.args||{})}`;
+      host.appendChild(d);
+      break;
+    }
+    case 'DUPLICATE_SUPPRESSED':
+      c.d++; $('cd').textContent=c.d;
+      $('tstat').textContent = 'duplicate suppressed';
+      break;
+    case 'LATENCY':
+      $('lat').textContent = e.first_response_s + ' s';
+      break;
+    case 'AGENT_STATE':
+      $('status').textContent = 'agent ' + e.state;
+      break;
+  }
+};
+es.onerror = () => { $('status').textContent = 'event stream reconnecting…'; };
+
+// ---- microphone -> LiveKit --------------------------------------------------
+let roomObj = null;
+$('start').onclick = async () => {
+  $('start').disabled = true;
+  $('status').textContent = 'requesting microphone…';
+  try{
+    const t = await (await fetch('/token?room=dashboard')).json();
+    if (t.error) throw new Error(t.error);
+    const LK = window.LivekitClient || window.LiveKitClient;
+    roomObj = new LK.Room({ adaptiveStream:true, dynacast:true });
+    roomObj.on(LK.RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === 'audio') track.attach();   // hear the agent's TTS
+    });
+    roomObj.on(LK.RoomEvent.Disconnected, () => {
+      $('dot').classList.remove('live'); $('status').textContent='disconnected';
+      $('start').disabled=false; $('stop').disabled=true;
+    });
+    await roomObj.connect(t.url, t.token);
+    await roomObj.localParticipant.setMicrophoneEnabled(true);
+    $('dot').classList.add('live');
+    $('status').textContent = 'live in room "'+t.room+'" — speak now';
+    $('stop').disabled = false;
+  }catch(err){
+    $('status').textContent = 'mic/LiveKit error: ' + err.message;
+    $('start').disabled = false;
+  }
+};
+$('stop').onclick = async () => {
+  if (roomObj) await roomObj.disconnect();
+  roomObj = null;
+  $('dot').classList.remove('live'); $('status').textContent='stopped';
+  $('start').disabled=false; $('stop').disabled=true;
+};
+
+// ---- in-car extension ------------------------------------------------------
+$('navbtn').onclick = async () => {
+  $('navbtn').disabled = true;
+  $('navres').innerHTML = '<span class="cfg">running the real extension…</span>';
+  try{
+    const r = await (await fetch('/nav', {method:'POST'})).json();
+    const pill = r.passed ? '<span class="pill ok">PASS</span>' : '<span class="pill bad">FAIL</span>';
+    $('navres').innerHTML = pill + ` <span class="cfg">${r.seconds}s · exit ${r.exit_code}</span><pre>${escapeHtml(r.output)}</pre>`;
+  }catch(e){
+    $('navres').innerHTML = '<span class="pill bad">error</span> <span class="cfg">'+escapeHtml(e.message)+'</span>';
+  }
+  $('navbtn').disabled = false;
+};
+</script>
+</body>
+</html>
